@@ -7,10 +7,53 @@ app.set('trust proxy', true);
 app.use(express.json());
 app.use(express.static(__dirname));
 
+const fs = require('fs');
+const sqlite3 = require('sqlite3').verbose();
+
+const DATA_DIR = path.join(__dirname, '..', 'data');
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const DB_PATH = path.join(DATA_DIR, 'trips.db');
+const db = new sqlite3.Database(DB_PATH);
+
 const MAX_LOCATIONS = 200;
-const TRIP_GAP_MS = 5 * 60 * 1000;
-const clients = {};
+const TRIP_GAP_MS = 5 * 60 * 1000; // 5 minutes gap starts a new trip
+const clients = {}; // in-memory metadata: lastLocation, currentTripId, seq
 const sseClients = [];
+
+// initialize DB
+db.serialize(() => {
+    db.run(`CREATE TABLE IF NOT EXISTS trips (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_id TEXT,
+        started_at TEXT,
+        ended_at TEXT
+    )`);
+    db.run(`CREATE TABLE IF NOT EXISTS points (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        trip_id INTEGER,
+        seq INTEGER,
+        lat REAL,
+        lng REAL,
+        ts TEXT,
+        FOREIGN KEY(trip_id) REFERENCES trips(id)
+    )`);
+});
+
+function createNewTrip(deviceId, timestamp, callback) {
+    db.run(`INSERT INTO trips(device_id, started_at) VALUES(?,?)`, [deviceId, timestamp], function(err) {
+        if (err) return callback(err);
+        callback(null, this.lastID);
+    });
+}
+
+function closeTrip(tripId, endedAt) {
+    if (!tripId) return;
+    db.run(`UPDATE trips SET ended_at = ? WHERE id = ?`, [endedAt, tripId]);
+}
+
+function insertPoint(tripId, seq, lat, lng, ts) {
+    db.run(`INSERT INTO points(trip_id, seq, lat, lng, ts) VALUES(?,?,?,?,?)`, [tripId, seq, lat, lng, ts]);
+}
 
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
@@ -27,9 +70,10 @@ app.post('/location', (req, res) => {
     const timestamp = new Date().toISOString();
 
     const results = [];
+    // process each id and persist points/trips in sqlite
     ids.forEach(id => {
         if (!clients[id]) {
-            clients[id] = { lastLocation: null, history: [], trips: [], currentTrip: [] };
+            clients[id] = { lastLocation: null, history: [], currentTripId: null, seq: 0 };
         }
 
         const location = {
@@ -40,22 +84,46 @@ app.post('/location', (req, res) => {
         };
 
         const store = clients[id];
+        store.history = store.history || [];
         store.history.push(location);
         if (store.history.length > MAX_LOCATIONS) store.history.shift();
+
         const prev = store.lastLocation;
+        const nowMs = new Date(timestamp).getTime();
+        let needNewTrip = false;
         if (!prev) {
-            store.currentTrip = [location];
+            needNewTrip = true;
         } else {
             const prevTime = new Date(prev.timestamp).getTime();
-            const now = new Date(timestamp).getTime();
-            if (now - prevTime > TRIP_GAP_MS) {
-                if (store.currentTrip && store.currentTrip.length) {
-                    store.trips.push(store.currentTrip);
+            if (nowMs - prevTime > TRIP_GAP_MS) needNewTrip = true;
+        }
+
+        if (needNewTrip) {
+            // close previous trip
+            if (store.currentTripId) closeTrip(store.currentTripId, timestamp);
+            // create new trip row
+            createNewTrip(id, timestamp, (err, tripId) => {
+                if (err) console.error('createNewTrip err', err);
+                else {
+                    store.currentTripId = tripId;
+                    store.seq = 0;
+                    insertPoint(tripId, store.seq++, location.lat, location.lng, timestamp);
                 }
-                store.currentTrip = [location];
+            });
+        } else {
+            // continue existing trip
+            if (!store.currentTripId) {
+                // safeguard: create a trip
+                createNewTrip(id, timestamp, (err, tripId) => {
+                    if (err) console.error('createNewTrip err', err);
+                    else {
+                        store.currentTripId = tripId;
+                        store.seq = 0;
+                        insertPoint(tripId, store.seq++, location.lat, location.lng, timestamp);
+                    }
+                });
             } else {
-                store.currentTrip = store.currentTrip || [];
-                store.currentTrip.push(location);
+                insertPoint(store.currentTripId, store.seq++, location.lat, location.lng, timestamp);
             }
         }
 
@@ -147,11 +215,25 @@ app.get('/ids', (req, res) => {
 app.get('/trips', (req, res) => {
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: 'id query param required' });
-    const store = clients[id];
-    if (!store) return res.json({ trips: [] });
-    const trips = store.trips.slice();
-    if (store.currentTrip && store.currentTrip.length) trips.push(store.currentTrip);
-    res.json({ trips });
+    // fetch trips and points from db
+    db.all(`SELECT id, device_id, started_at, ended_at FROM trips WHERE device_id = ? ORDER BY started_at DESC`, [id], (err, rows) => {
+        if (err) return res.status(500).json({ error: 'db error' });
+        const trips = [];
+        if (!rows || rows.length === 0) return res.json({ trips });
+        let remaining = rows.length;
+        rows.forEach(tr => {
+            db.all(`SELECT seq, lat, lng, ts FROM points WHERE trip_id = ? ORDER BY seq ASC`, [tr.id], (err2, pts) => {
+                if (err2) pts = [];
+                trips.push({ id: tr.id, started_at: tr.started_at, ended_at: tr.ended_at, points: pts || [] });
+                remaining -= 1;
+                if (remaining === 0) {
+                    // return trips in chronological order (oldest first)
+                    trips.sort((a,b)=> new Date(a.started_at)-new Date(b.started_at));
+                    res.json({ trips });
+                }
+            });
+        });
+    });
 });
 
 app.listen(PORT, () => {

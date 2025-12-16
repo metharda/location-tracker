@@ -52,6 +52,23 @@
             background: #4CAF50;
             color: white;
         }
+        /* trips modal */
+        .modal {
+            position: absolute;
+            left: 10px;
+            top: 60px;
+            width: 320px;
+            max-height: 70%;
+            overflow: auto;
+            background: white;
+            padding: 10px;
+            border-radius: 6px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 1200;
+            font-size: 13px;
+        }
+        .trip-item { padding:6px 4px; border-bottom:1px solid #eee; }
+        .trip-item button { float:right; }
     </style>
 </head>
 <body>
@@ -64,6 +81,10 @@
     <div class="info-box" id="idsBox" style="right: 180px; width:200px;">
         <div><strong>IDs</strong></div>
         <div id="idsList">(Loading...)</div>
+    </div>
+    <div id="tripsModal" class="modal" style="display:none">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><strong>Trips</strong><button id="closeTrips">Close</button></div>
+        <div id="tripsList">(no trips)</div>
     </div>
     <div class="control-box">
         <button id="toggleFollow" class="active">Follow</button>
@@ -170,22 +191,70 @@
                     box.appendChild(el);
                 });
                 document.querySelectorAll('.tripsBtn').forEach(b => {
-                    b.addEventListener('click', e => {
+                    b.addEventListener('click', async e => {
                         const id = e.target.getAttribute('data-id');
-                        fetch('/trips?id=' + encodeURIComponent(id)).then(r => r.json()).then(d => {
-                            if (polylines[id]) {
-                                polylines[id].forEach(p => map.removeLayer(p));
-                            }
-                            polylines[id] = [];
-                            d.trips.forEach((trip, idx) => {
-                                const coords = trip.map(p => [p.lat, p.lng]);
-                                const poly = L.polyline(coords, {color: getColorForId(id), weight: 3, dashArray: (idx%2? '6,6':'')}).addTo(map);
-                                polylines[id].push(poly);
-                            });
-                        });
+                        const resp = await fetch('/trips?id=' + encodeURIComponent(id));
+                        const d = await resp.json();
+                        showTripsModal(id, d.trips || []);
                     });
                 });
             }).catch(()=>{});
+        }
+
+        document.getElementById('closeTrips').addEventListener('click', ()=>{
+            document.getElementById('tripsModal').style.display='none';
+        });
+
+        function showTripsModal(id, trips) {
+            const modal = document.getElementById('tripsModal');
+            const list = document.getElementById('tripsList');
+            list.innerHTML = '';
+            if (!trips || trips.length === 0) list.innerHTML = '(no trips)';
+            trips.forEach((trip, idx) => {
+                const div = document.createElement('div');
+                div.className = 'trip-item';
+                const start = new Date(trip.started_at).toLocaleString();
+                const end = trip.ended_at ? new Date(trip.ended_at).toLocaleString() : '(ongoing)';
+                div.innerHTML = `<div><strong>Trip ${trip.id}</strong><div style="font-size:11px;color:#555">${start} → ${end}</div></div>`;
+                const btn = document.createElement('button');
+                btn.textContent = 'Show route';
+                btn.addEventListener('click', () => drawTripOnMap(id, trip));
+                div.appendChild(btn);
+                list.appendChild(div);
+            });
+            modal.style.display = 'block';
+        }
+
+        async function drawTripOnMap(deviceId, trip) {
+            // remove previous polylines for this device
+            if (polylines[deviceId]) polylines[deviceId].forEach(p=>map.removeLayer(p));
+            polylines[deviceId] = [];
+            const pts = trip.points || [];
+            if (!pts || pts.length < 2) return alert('Not enough points');
+
+            // sample points if too many
+            const sample = pts.length > 50 ? pts.filter((_,i)=> i%Math.ceil(pts.length/50)===0) : pts;
+            const coords = sample.map(p => `${p.lng},${p.lat}`).join(';');
+            try {
+                const url = `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`;
+                const r = await fetch(url);
+                const jr = await r.json();
+                if (jr.code === 'Ok' && jr.routes && jr.routes.length) {
+                    const geom = jr.routes[0].geometry.coordinates.map(c=>[c[1],c[0]]);
+                    const poly = L.polyline(geom, {color: getColorForId(deviceId), weight:4}).addTo(map);
+                    polylines[deviceId].push(poly);
+                    map.fitBounds(poly.getBounds(), {padding:[20,20]});
+                } else {
+                    // fallback: draw direct polyline through points
+                    const direct = L.polyline(pts.map(p=>[p.lat,p.lng]), {color:getColorForId(deviceId), weight:3}).addTo(map);
+                    polylines[deviceId].push(direct);
+                    map.fitBounds(direct.getBounds(), {padding:[20,20]});
+                }
+            } catch (e) {
+                const direct = L.polyline(pts.map(p=>[p.lat,p.lng]), {color:getColorForId(deviceId), weight:3}).addTo(map);
+                polylines[deviceId].push(direct);
+                map.fitBounds(direct.getBounds(), {padding:[20,20]});
+            }
         }
 
         fetch('/location').then(r => r.json()).then(all => {
