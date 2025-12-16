@@ -37,7 +37,9 @@ jobs:
           port: ${{ secrets.REMOTE_PORT }}
           script: |
             set -e
-            cd ${REMOTE_PATH:-"${{ secrets.REMOTE_PATH }}"} || exit 2
+            echo "DEBUG: REMOTE_PATH='${{ secrets.REMOTE_PATH }}'"
+            ls -la "${{ secrets.REMOTE_PATH }}" || echo "remote-path-missing"
+            cd "${{ secrets.REMOTE_PATH }}" || exit 2
             # ensure repo exists and is on main
             if [ -d .git ]; then
               git fetch origin main
