@@ -37,10 +37,7 @@ jobs:
           port: ${{ secrets.REMOTE_PORT }}
           script: |
             set -e
-            echo "DEBUG: REMOTE_PATH='${{ secrets.REMOTE_PATH }}'"
-            ls -la "${{ secrets.REMOTE_PATH }}" || echo "remote-path-missing"
             cd "${{ secrets.REMOTE_PATH }}" || exit 2
-            # ensure repo exists and is on main
             if [ -d .git ]; then
               git fetch origin main
               git reset --hard origin/main
@@ -49,7 +46,7 @@ jobs:
             fi
             npm ci --only=production || true
             if command -v pm2 >/dev/null 2>&1; then
-              pm2 restart location-tracker || pm2 start server.js --name location-tracker
+                pm2 restart location-tracker || pm2 start app/server.js --name location-tracker
             elif [ -f /etc/systemd/system/location-tracker.service ]; then
               sudo systemctl daemon-reload || true
               sudo systemctl restart location-tracker || true
