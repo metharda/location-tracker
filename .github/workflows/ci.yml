@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'examples/**'
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+      - name: Install
+        run: npm ci
+      - name: Build
+        run: npm run build
+      - name: Test
+        run: npm test
+
+  deploy:
+    needs: build-test
+    runs-on: ubuntu-latest
+    if: ${{ success() }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run remote git pull + deploy commands
+        uses: appleboy/ssh-action@v0.1.6
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          username: ${{ secrets.REMOTE_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.REMOTE_PORT }}
+          script: |
+            set -e
+            cd ${REMOTE_PATH:-"${{ secrets.REMOTE_PATH }}"} || exit 2
+            # ensure repo exists and is on main
+            if [ -d .git ]; then
+              git fetch origin main
+              git reset --hard origin/main
+            else
+              git clone --depth 1 https://github.com/${{ github.repository }} .
+            fi
+            npm ci --only=production || true
+            if command -v pm2 >/dev/null 2>&1; then
+              pm2 restart location-tracker || pm2 start server.js --name location-tracker
+            elif [ -f /etc/systemd/system/location-tracker.service ]; then
+              sudo systemctl daemon-reload || true
+              sudo systemctl restart location-tracker || true
+            fi

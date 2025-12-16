@@ -11,7 +11,11 @@ double lat = 0.0, lng = 0.0;
 
 const char* ssid       = "your-ssid";
 const char* password   = "your-password";
+// Set this to your server URL including the /location endpoint, e.g.:
+// const char* serverURL = "http://example.com/location";
 const char* serverURL  = "your-server-url";
+// Unique device id that will be sent in request header 'id'
+const char* deviceId = "esp32-01";
 const unsigned long postInterval = 60UL * 1000;
 unsigned long lastPostTime = 0;
 
@@ -75,6 +79,7 @@ void sendLocation() {
   HTTPClient http;
   http.begin(serverURL);
   http.addHeader("Content-Type", "application/json");
+  http.addHeader("id", deviceId);
   String payload = String("{\"lat\":") + String(lat, 6)
                  + ",\"lng\":" + String(lng, 6) + "}";
   int code = http.POST(payload);

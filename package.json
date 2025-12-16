@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node app/server.js",
+    "build": "echo \"No build step defined\"",
+    "test": "echo \"No tests defined\" && exit 0"
   },
   "keywords": [],
   "author": "",

@@ -61,6 +61,10 @@
         <div>Latitude: <span id="lat">-</span></div>
         <div>Longitude: <span id="lng">-</span></div>
     </div>
+    <div class="info-box" id="idsBox" style="right: 180px; width:200px;">
+        <div><strong>IDs</strong></div>
+        <div id="idsList">(Loading...)</div>
+    </div>
     <div class="control-box">
         <button id="toggleFollow" class="active">Follow</button>
         <button id="centerMap">Go to Location</button>
@@ -74,39 +78,49 @@
             attribution: '© OpenStreetMap'
         }).addTo(map);
         
-        let marker = null;
-        let currentPosition = null;
+        const markers = {};
+        const currentPosition = {};
+        const polylines = {};
+        const COLORS = ['#e6194b','#3cb44b','#ffe119','#4363d8','#f58231','#911eb4','#46f0f0','#f032e6','#bcf60c','#fabebe'];
         let followMode = true;
         
         const customIcon = L.icon({
-            iconUrl: '/app/icon.svg',
+            iconUrl: '/icon.svg',
             iconSize: [32, 32],
             iconAnchor: [16, 32],
             popupAnchor: [0, -32]
         });
 
-        function updateLocation(lat, lng) {
+        function getColorForId(id) {
+            let n = 0;
+            for (let i = 0; i < id.length; i++) n += id.charCodeAt(i);
+            return COLORS[n % COLORS.length];
+        }
+
+        function updateLocationForId(id, lat, lng, timestamp) {
             const position = [lat, lng];
-            currentPosition = position;
-            
-            if (!marker) {
-                marker = L.marker(position, {icon: customIcon}).addTo(map);                
-                marker.bindTooltip("Current Location", {
-                    permanent: false,
-                    direction: 'top',
-                    offset: [0, -20]
+            currentPosition[id] = position;
+
+            if (!markers[id]) {
+                const color = getColorForId(id);
+                const icon = L.icon({
+                    iconUrl: '/icon.svg',
+                    iconSize: [28, 28],
+                    iconAnchor: [14, 28]
                 });
+                markers[id] = L.marker(position, {icon}).addTo(map);
+                markers[id].bindTooltip(`ID: ${id}`, {permanent: false, direction: 'top', offset: [0, -20]});
             } else {
-                marker.setLatLng(position);
+                markers[id].setLatLng(position);
             }
-            
+
             if (followMode) {
                 map.setView(position, map.getZoom());
             }
-        
+
             document.getElementById('lat').textContent = lat.toFixed(6);
             document.getElementById('lng').textContent = lng.toFixed(6);
-            document.getElementById('lastUpdate').textContent = new Date().toLocaleTimeString('en-US');
+            document.getElementById('lastUpdate').textContent = new Date(timestamp || Date.now()).toLocaleTimeString('en-US');
         }
         
         document.getElementById('toggleFollow').addEventListener('click', function() {
@@ -131,11 +145,11 @@
         });
         
         const eventSource = new EventSource('/events');
-        
         eventSource.onmessage = function(event) {
             const data = JSON.parse(event.data);
-            if (data.lat && data.lng) {
-                updateLocation(data.lat, data.lng);
+            if (data.id && data.lat && data.lng) {
+                updateLocationForId(data.id, data.lat, data.lng, data.timestamp);
+                renderIdsList();
             }
         };
         
@@ -143,14 +157,45 @@
             console.error('SSE connection error:', error);
         };
         
-        fetch('/location')
-            .then(res => res.json())
-            .then(data => {
-                if (data.current) {
-                    updateLocation(data.current.lat, data.current.lng);
-                }
-            })
-            .catch(err => console.error('Failed to fetch location:', err));
+        function renderIdsList() {
+            fetch('/ids').then(r => r.json()).then(ids => {
+                const box = document.getElementById('idsList');
+                if (!ids || ids.length === 0) return box.innerHTML = '(none)';
+                box.innerHTML = '';
+                ids.forEach(id => {
+                    const el = document.createElement('div');
+                    el.style.marginBottom = '6px';
+                    const color = getColorForId(id);
+                    el.innerHTML = `<span style="display:inline-block;width:10px;height:10px;background:${color};margin-right:6px;"></span><strong>${id}</strong> <button data-id="${id}" class="tripsBtn">Trips</button>`;
+                    box.appendChild(el);
+                });
+                document.querySelectorAll('.tripsBtn').forEach(b => {
+                    b.addEventListener('click', e => {
+                        const id = e.target.getAttribute('data-id');
+                        fetch('/trips?id=' + encodeURIComponent(id)).then(r => r.json()).then(d => {
+                            if (polylines[id]) {
+                                polylines[id].forEach(p => map.removeLayer(p));
+                            }
+                            polylines[id] = [];
+                            d.trips.forEach((trip, idx) => {
+                                const coords = trip.map(p => [p.lat, p.lng]);
+                                const poly = L.polyline(coords, {color: getColorForId(id), weight: 3, dashArray: (idx%2? '6,6':'')}).addTo(map);
+                                polylines[id].push(poly);
+                            });
+                        });
+                    });
+                });
+            }).catch(()=>{});
+        }
+
+        fetch('/location').then(r => r.json()).then(all => {
+            if (!all) return;
+            Object.keys(all).forEach(id => {
+                const item = all[id];
+                if (item.current) updateLocationForId(id, item.current.lat, item.current.lng, item.current.timestamp);
+            });
+            renderIdsList();
+        }).catch(err => console.error('Failed to fetch locations:', err));
     </script>
 </body>
 </html>
