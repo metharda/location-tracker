@@ -474,6 +474,29 @@
                         <button class="btn-small">Göster</button>
                     `;
                     card.querySelector('button').addEventListener('click', () => drawTrip(id, trip));
+                    const delBtn = document.createElement('button');
+                    delBtn.className = 'btn-small';
+                    delBtn.style.marginLeft = '8px';
+                    delBtn.style.background = '#fee2e2';
+                    delBtn.style.borderColor = '#fca5a5';
+                    delBtn.textContent = 'Sil';
+                    delBtn.addEventListener('click', () => {
+                        if (!confirm('Bu seferi silmek istediğine emin misin?')) return;
+                        fetch('/trips?tripId=' + encodeURIComponent(trip.id), { method: 'DELETE' })
+                            .then(r => r.json())
+                            .then(resp => {
+                                if (resp && resp.status === 'success') {
+                                    loadTrips(id);
+                                    if (polylines[id]) {
+                                        polylines[id].forEach(p => map.removeLayer(p));
+                                        delete polylines[id];
+                                    }
+                                } else {
+                                    alert('Silme sırasında hata oluştu');
+                                }
+                            }).catch(() => alert('Silme isteği başarısız'));
+                    });
+                    card.appendChild(delBtn);
                     container.appendChild(card);
                 });
             }).catch(() => {

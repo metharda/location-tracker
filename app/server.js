@@ -266,6 +266,27 @@ app.get('/trips', (req, res) => {
     });
 });
 
+app.delete('/trips', (req, res) => {
+    const tripId = req.query.tripId || req.query.id || null;
+    if (!tripId) return res.status(400).json({ error: 'tripId query param required' });
+    db.serialize(() => {
+        db.run(`DELETE FROM points WHERE trip_id = ?`, [tripId], function(err) {
+            if (err) return res.status(500).json({ error: 'db error deleting points' });
+            db.run(`DELETE FROM trips WHERE id = ?`, [tripId], function(err2) {
+                if (err2) return res.status(500).json({ error: 'db error deleting trip' });
+                Object.keys(clients).forEach(k => {
+                    const store = clients[k];
+                    if (store && store.currentTripId == tripId) {
+                        store.currentTripId = null;
+                        store.lastTripPoint = null;
+                    }
+                });
+                res.json({ status: 'success', tripId: tripId });
+            });
+        });
+    });
+});
+
 app.listen(PORT, () => {
     console.log(`Server running at http://localhost:${PORT}`);
     console.log(`\nGPS Threshold: ${MIN_DISTANCE_METERS}m (movements smaller than this are ignored for trip recording)`);
