@@ -16,11 +16,10 @@ const DB_PATH = path.join(DATA_DIR, 'trips.db');
 const db = new sqlite3.Database(DB_PATH);
 
 const MAX_LOCATIONS = 200;
-const TRIP_GAP_MS = 5 * 60 * 1000; // 5 minutes gap starts a new trip
-const clients = {}; // in-memory metadata: lastLocation, currentTripId, seq
+const TRIP_GAP_MS = 5 * 60 * 1000;
+const clients = {};
 const sseClients = [];
 
-// initialize DB
 db.serialize(() => {
     db.run(`CREATE TABLE IF NOT EXISTS trips (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -70,7 +69,6 @@ app.post('/location', (req, res) => {
     const timestamp = new Date().toISOString();
 
     const results = [];
-    // process each id and persist points/trips in sqlite
     ids.forEach(id => {
         if (!clients[id]) {
             clients[id] = { lastLocation: null, history: [], currentTripId: null, seq: 0 };
@@ -99,9 +97,7 @@ app.post('/location', (req, res) => {
         }
 
         if (needNewTrip) {
-            // close previous trip
             if (store.currentTripId) closeTrip(store.currentTripId, timestamp);
-            // create new trip row
             createNewTrip(id, timestamp, (err, tripId) => {
                 if (err) console.error('createNewTrip err', err);
                 else {
@@ -111,9 +107,7 @@ app.post('/location', (req, res) => {
                 }
             });
         } else {
-            // continue existing trip
             if (!store.currentTripId) {
-                // safeguard: create a trip
                 createNewTrip(id, timestamp, (err, tripId) => {
                     if (err) console.error('createNewTrip err', err);
                     else {
@@ -215,7 +209,6 @@ app.get('/ids', (req, res) => {
 app.get('/trips', (req, res) => {
     const id = req.query.id;
     if (!id) return res.status(400).json({ error: 'id query param required' });
-    // fetch trips and points from db
     db.all(`SELECT id, device_id, started_at, ended_at FROM trips WHERE device_id = ? ORDER BY started_at DESC`, [id], (err, rows) => {
         if (err) return res.status(500).json({ error: 'db error' });
         const trips = [];
@@ -227,7 +220,6 @@ app.get('/trips', (req, res) => {
                 trips.push({ id: tr.id, started_at: tr.started_at, ended_at: tr.ended_at, points: pts || [] });
                 remaining -= 1;
                 if (remaining === 0) {
-                    // return trips in chronological order (oldest first)
                     trips.sort((a,b)=> new Date(a.started_at)-new Date(b.started_at));
                     res.json({ trips });
                 }
